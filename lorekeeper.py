@@ -1,7 +1,7 @@
 import click
 import os
 import sqlite3
-from flask import current_app, g
+from flask import current_app, Flask, g
 from flask.cli import with_appcontext
 
 
@@ -64,33 +64,31 @@ class Row(sqlite3.Row):
     def __repr__(self): return f"{self.id} {self.val}"
 
 
-class LoreKeeper:
+class LoreKeeper(object):
     #? maybe a dict of databases?
-    def __init__(self, db_path:str):
-        self._db_path = db_path
+    def __init__(self, db_name:str):
+        self.db_name = db_name
         self._db = None
-
-    @property
-    def db_path(self):
-        return self._db_path
-
-    @db_path.setter
-    def db_path(self, path:str) -> None:
-        if os.path.exists(path):
-            self._db_path = path
-        else:
-            raise FileNotFoundError
+        self.class_map = {}
 
     @property
     def db(self) -> sqlite3.Connection:
         if 'db' not in g:
             g.db = sqlite3.connect(
-                current_app.config[self.db_path],
+                current_app.config[self.db_name],
                 detect_types=sqlite3.PARSE_DECLTYPES
             )
             g.db.row_factory = Row
 
         return g.db
+
+    def fetch_all(self, query) -> list:
+        """
+        """
+
+        results = self.db.execute(query).fetchall()
+
+        return results
 
     @classmethod
     def _coerce_type(cls, val, separator=",", none=None):
@@ -197,6 +195,10 @@ class LoreKeeper:
 
     @classmethod
     def _where(cls, table:str, conditions, conjunction='AND'):
+        """
+        
+        """
+
         comparators = ('=', '!=', '>', '>=', '<', '<=', 'IS', 'IS NOT', 'IN')
         conjunctions = ('AND', 'OR', 'NOT')
 
@@ -263,6 +265,11 @@ class LoreKeeper:
         return results
 
      #TODO: columns parameter 
+    
+    #? will probaly need to add validation
+    def select_one(self, table:str, where, columns:list='*', datatype=None):
+        return self.select(table, columns, where, datatype)[0]
+
     #? and maybe intersection of table columns and values
     def insert(self, table:str, values:dict, datatype=None) -> None:
         """
@@ -280,12 +287,38 @@ class LoreKeeper:
             VALUES=", ".join("?" * len(cols))
         )
 
-        db = self.get_db()
-        db.execute(
+        self.db.execute(
             INSERT,
             [f"{values.get(key)}" for key in cols]
         )
-        db.commit()
+        self.db.commit()
+
+    def update(self, table:str, values:dict, where:dict) -> None:
+        """
+        UPDATE `table`
+            SET `values`
+            WHERE `where`
+        """
+
+        query = "UPDATE `{TABLE}` SET {SET} WHERE {WHERE}".format(
+            TABLE=table,
+            SET=", ".join([f"{column}=?" for column in values.keys()]),
+            WHERE = _where(where)
+        )
+        self.db.execute(query, list(values.values()))
+        self.db.commit()
+
+    def delete(self, table:str, where:dict) -> None:
+        """
+        DELETE FROM `table` WHERE `where`;
+        """
+
+        query = "DELETE FROM {TABLE} WHERE {WHERE};".format(
+            TABLE=table,
+            WHERE=_where(where)
+        )
+        self.db.execute(query)
+        self.db.commit()
 
     @staticmethod
     def coerce_type(obj):
@@ -310,15 +343,13 @@ class LoreKeeper:
 
     @classmethod
     def _init_db(cls) -> None:
-        db = cls.get_db()
-
         with current_app.open_resource('schema.sql') as f:
-            db.executescript(f.read().decode('utf8'))
+            cls.db.executescript(f.read().decode('utf8'))
 
-    @classmethod
-    def _init_app(cls, app:Flask) -> None:
-        app.teardown_appcontext(cls._close_db)
-        app.cli.add_command(cls._init_db_command)
+    @staticmethod
+    def init_app(app:Flask) -> None:
+        app.teardown_appcontext(LoreKeeper._close_db)
+        app.cli.add_command(LoreKeeper.._init_db_command)
 
     @staticmethod
     def _close_db(e=None) -> None:
