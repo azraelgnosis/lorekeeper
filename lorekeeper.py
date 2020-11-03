@@ -1,75 +1,38 @@
+from abc import ABCMeta
 import click
+import json
 import os
 import sqlite3
 from flask import current_app, Flask, g
 from flask.cli import with_appcontext
 
+from .consts import *
+from .models import Row, Table
 
-class Row(sqlite3.Row):
-    def __init__(self, cursor, values):
-        self.cursor = cursor
-        self.values = values
-        self.columns = [col[0] for col in cursor.description]
-        self.id = " ".join([str(val) for col, val in zip(self.columns, self.values) if 'id' in col]) # combines values with 'id' in column name.
-        self.val = " ".join([str(val) for col, val in zip(self.columns, self.values) if 'val' in col]) # combines values with 'val' in column name.
-        
-        for col, val in zip(self.columns, self.values):
-            setattr(self, col, val)
-
-    def get(self, attr:str):
-        """
-        Returns the value of `attr` if present
-            else, returns None.
-        """
-        return getattr(self, attr, None)
-
-    def items(self) -> zip:
-        return zip(self.columns, self.values)
-
-    def to_dict(self):
-        return dict(zip(self.columns, self.values))
-
-    @classmethod
-    def _coerce_type(cls, val, separator=",", none=None):
-        """
-        Coerces `val` as a float or int if applicable,
-        if `val` is None, returns the value of `none`
-        else returns original value.
-
-        :param val: Value to coerce.
-        """
-
-        if val is None:
-            val = none
-        elif isinstance(val, str):
-            if len(coll := val.split(separator)) > 1:
-                val = [cls._coerce_type(elem.strip()) for elem in coll]
-
-            try:
-                if "." in str(val):
-                    val = float(val)
-                else:
-                    val = int(val)
-            except TypeError: pass
-            except ValueError: pass
-        
-        return val
-
-    def __getitem__(self, key:str):
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError
-
-    def __repr__(self): return f"{self.id} {self.val}"
-
-
-class LoreKeeper(object):
+class LoreKeeper(metaclass=ABCMeta):
     #? maybe a dict of databases?
-    def __init__(self, db_name:str):
+    def __init__(self, db_name:str='DATABASE'):
         self.db_name = db_name
         self._db = None
-        self.class_map = {}
+        self._table_map = {}
+
+    @property
+    def tables(self) -> list:
+        if not self._tables:
+            self._tables = self.select("sqlite_master", columns=["name"], where={"type": "table"}, datatype=Table)
+            # def get_tables(self) -> list:
+        self.select(table='sqlite_master')
+
+        tables = self.db.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
+        tables = [Table(table['name'], db) for table in tables[1:]]
+
+        return tables
+
+        return
+
+    @property
+    def table_map(self) -> dict:
+        return self._table_map
 
     @property
     def db(self) -> sqlite3.Connection:
@@ -82,39 +45,13 @@ class LoreKeeper(object):
 
         return g.db
 
-    def fetch_all(self, query) -> list:
+    def fetch_all(self, query) -> list:  # TODO huh?
         """
         """
 
         results = self.db.execute(query).fetchall()
 
         return results
-
-    @classmethod
-    def _coerce_type(cls, val, separator=",", none=None):
-        """
-        Coerces `val` as a float or int if applicable,
-        if `val` is None, returns the value of `none`
-        else returns original value.
-
-        :param val: Value to coerce.
-        """
-
-        if val is None:
-            val = none
-        elif isinstance(val, str):
-            if len(coll := val.split(separator)) > 1:
-                val = [cls._coerce_type(elem.strip()) for elem in coll]
-
-            try:
-                if "." in str(val):
-                    val = float(val)
-                else:
-                    val = int(val)
-            except (TypeError, ValueError):
-                val = f"'{val}'"
-
-        return val
 
     def run_query(self, query:str, datatype=None) -> list:
         """
@@ -127,7 +64,7 @@ class LoreKeeper(object):
         results = None
         directive = query.split()[0]
 
-        if directive.upper() == 'SELECT':
+        if directive.upper() == SELECT:
             results = self.db.execute(query).fetchall()
 
             if datatype:
@@ -199,20 +136,20 @@ class LoreKeeper(object):
         
         """
 
-        comparators = ('=', '!=', '>', '>=', '<', '<=', 'IS', 'IS NOT', 'IN')
-        conjunctions = ('AND', 'OR', 'NOT')
+        comparators = ('=', '!=', '>', '>=', '<', '<=', ' IS ', ' IS NOT ', ' IN ')
+        conjunctions = (' AND ', ' OR ', ' NOT ')
 
         WHERE = ""
         if isinstance(conditions, (int, str)):
             try:
-                # assumes must be an id: "42" -> "table_id = 42"
-                WHERE = f"{table}_id = {int(conditions)}"  
+                # assumes `conditions` must be an id: "42" -> "table_id = 42"
+                WHERE = f"`{table}`.{table}_id = {int(conditions)}"  
             except ValueError:
                 if cls._contains(conditions, comparators):
                     WHERE = conditions
                 else:
                     # or maybe a val: "Picard" -> "table_val = 'Picard'"
-                    WHERE = f"{table}_val = '{conditions}'"  
+                    WHERE = f"`{table}`.{table}_val = '{conditions}'"  
             except TypeError:
                 print("Somethin's up!")
                 raise TypeError
@@ -223,9 +160,9 @@ class LoreKeeper(object):
                 if key in conjunctions:
                     temp.append(cls._where(table, val, conjunction=key))
                 elif isinstance(key, tuple):
-                    temp.append(f"{key[0]} {val} {coerce_type(key[1])}")
+                    temp.append(f"{key[0]} {val} {cls.coerce_type(key[1])}")
                 else:
-                    temp.append(f"{key} = {coerce_type(val)}")
+                    temp.append(f"{key} = {cls.coerce_type(val)}")
 
             WHERE = f" {conjunction} ".join(temp)
 
@@ -246,20 +183,19 @@ class LoreKeeper(object):
         return WHERE
 
     def select(self, table:str, columns='*', join=None, where=None, datatype=None) -> list:
-        """
-        SELECT `columns` FROM `table`
-        """
+        """SELECT `columns` FROM `table` [LEFT JOIN `join`] [WHERE `where`]"""
 
         SELECT = "SELECT {COLUMNS} FROM {TABLE} {JOIN} {WHERE}" \
             .format(
                 COLUMNS=self._columns(columns),
                 TABLE=table,
                 JOIN=self._join(table, join),
-                WHERE=f"WHERE {self._where(where)}" if where else ""
+                WHERE=f"WHERE {self._where(table, where)}" if where else ""
             )
 
-        results = self.get_db().execute(SELECT).fetchall()
+        results = self.db.execute(SELECT).fetchall()
         if datatype:
+            datatype = self.table_map.get(table, datatype)
             results = [datatype.from_row(result) for result in results]
 
         return results
@@ -280,17 +216,17 @@ class LoreKeeper(object):
             new_obj = datatype.from_dict(values)
             values = new_obj.to_dict()
 
-        cols = self.get_columns(table)[1:]
+        cols = self._get_columns(table)[1:]
         INSERT = "INSERT INTO `{TABLE}` ({COLUMNS}) VALUES ({VALUES})".format(
             TABLE=table,
             COLUMNS=", ".join(cols),
             VALUES=", ".join("?" * len(cols))
         )
+        
+        if not isinstance(values, dict):
+            values = dict(zip(cols, values))
 
-        self.db.execute(
-            INSERT,
-            [f"{values.get(key)}" for key in cols]
-        )
+        self.db.execute(INSERT, [f"{values.get(key)}" for key in cols])
         self.db.commit()
 
     def update(self, table:str, values:dict, where:dict) -> None:
@@ -303,7 +239,7 @@ class LoreKeeper(object):
         query = "UPDATE `{TABLE}` SET {SET} WHERE {WHERE}".format(
             TABLE=table,
             SET=", ".join([f"{column}=?" for column in values.keys()]),
-            WHERE = _where(where)
+            WHERE = self._where(table, where)
         )
         self.db.execute(query, list(values.values()))
         self.db.commit()
@@ -320,18 +256,52 @@ class LoreKeeper(object):
         self.db.execute(query)
         self.db.commit()
 
-    @staticmethod
-    def coerce_type(obj):
-        if isinstance(obj, str):
-            try:
-                if '.' in obj:
-                    obj = float(obj)
-                else:
-                    obj = int(obj)
-            except ValueError:
-                obj = f"'{obj}'"
+# ==========================================================================================
+
+    #! check tables property above
+    def get_table(table_name:str) -> Table: raise NotImplementedError
+    def get_table(self, name:str) -> Table:
+        """
+        Selects everything from `table`.
+
+        Returns Table object.
+        """
+
+        table = Table(name, self.db)
+        table.rows = select(name)
+
+        return table
+
+    @classmethod
+    def get_usernames(cls) -> list: return cls.select(USER, columns=[USER_VAL])
+
+# ==========================================================================================
         
-        return obj
+    @classmethod
+    def _coerce_type(cls, val, separator=",", none=None):
+        """
+        Coerces `val` as a float or int if applicable,
+        if `val` is None, returns the value of `none`
+        else returns original value.
+
+        :param val: Value to coerce.
+        """
+
+        if val is None:
+            val = none
+        elif isinstance(val, str):
+            if len(coll := val.split(separator)) > 1:
+                val = [cls._coerce_type(elem.strip()) for elem in coll]
+
+            try:
+                if "." in str(val):
+                    val = float(val)
+                else:
+                    val = int(val)
+            except (TypeError, ValueError):
+                val = f"'{val}'"
+
+        return val
 
     @staticmethod
     def is_iter(obj) -> bool:
@@ -341,28 +311,34 @@ class LoreKeeper(object):
     def _contains(containing, contained) -> bool:
         return any(True for elem in contained if elem in containing)
 
-    @classmethod
-    def _init_db(cls) -> None:
-        with current_app.open_resource('schema.sql') as f:
-            cls.db.executescript(f.read().decode('utf8'))
+# ==========================================================================================
+    # database initialization methods
 
-    @staticmethod
-    def init_app(app:Flask) -> None:
-        app.teardown_appcontext(LoreKeeper._close_db)
-        app.cli.add_command(LoreKeeper.._init_db_command)
+    @classmethod
+    def init_app(cls, app:Flask) -> None:
+        app.teardown_appcontext(cls._close_db)
+        app.cli.add_command(cls._init_db_command)
+
+    def _init_db(self) -> None:
+        with current_app.open_resource('schema.sql') as f:
+            self.db.executescript(f.read().decode('utf8'))
 
     @staticmethod
     def _close_db(e=None) -> None:
         db = g.pop('db', None)
 
-        if db is not None:
+        if db:
             db.close()
 
-    @classmethod
+    # @staticmethod
     @click.command('init-db')
     @with_appcontext
-    def _init_db_command(cls) -> None:
+    def _init_db_command() -> None:
         """Clear the existing data and create new tables."""
 
-        cls._init_db()
+        LoreKeeper()._init_db()
         click.echo(f"Initialized the database.")
+
+    @click.command('backup-db')
+    def um() -> None:
+        pass
