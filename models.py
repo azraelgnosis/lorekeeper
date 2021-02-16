@@ -1,4 +1,6 @@
+from abc import ABC
 import json
+import sqlite3
 
 from .consts import *
 
@@ -62,12 +64,13 @@ class Row(sqlite3.Row):
 
 
 class Model(ABC, object):
-    __slots__ = ['name']
+    __slots__ = [ID, NAME]
     columns = []
     rename = {}
 
-    def __init__(self, **kwargs) -> None:
-        self.name = None
+    def __init__(self, pk=None, name=None, **kwargs) -> None:
+        self.id = pk
+        self.name = name  # TODO what's this for?
 
         for key, val in kwargs.items():
             setattr(self, key, val)
@@ -77,24 +80,24 @@ class Model(ABC, object):
     def _init(self): ...
 
     @classmethod
-    def from_row(cls, row:Row) -> None:
-        # new_obj = cls()
+    def from_row(cls, row:Row) -> 'Model':
+        if any(key in cls.rename.keys() for key in row.keys()):
+            new_obj = cls(**{cls.rename.get(key, key): val for key, val in row.items()})
+        else:
+            new_obj = cls(**row)
 
-        # for key in row.keys():
-        #     setattr(new_obj, key, row[key])
-
-        return cls(**{cls.rename.get(key, key): row[key] for key in row.keys()})
+        return new_obj
 
     def to_csv(self): return ",".join(getattr(self, slot) for slot in self.__slots__)
     def to_dict(self): return dict(self)
     def to_json(self): return json.dumps(dict(self)) # return str(dict(self)).replace("'", '"').replace("None", "null")
 
-    def __dict__(self): {slot: getattr(self, slot) for slot in self.__slots__}
-    def __repr__(self): return f"{self.name}"
+    def __iter__(self): return iter({slot: getattr(self, slot) for slot in self.__slots__}.items())
+    def __repr__(self): return f"{self.__class__.__name__}: {self.name}"
 
 
 class Table(Model):
-    __slots__ = ['db', 'name', 'columns', 'size', 'rows']
+    __slots__ = ['db', 'name']
     def __init__(self, name:str, db:sqlite3.Connection) -> None:
         self.name = name
         self.db = db
@@ -109,7 +112,7 @@ class Table(Model):
 
         if not self._columns:
             cursor = self.db.execute(f"SELECT * FROM {self.name}")
-            self.columns = [col[0] for col in cursor.description]
+            self._columns = [col[0] for col in cursor.description]
 
         return self._columns
 
@@ -134,9 +137,10 @@ class Table(Model):
 
 
 class User(Model):
-    slots = [USERNAME, PASSWORD]
+    __slots__ = [USER_ID, USER_VAL, PASSWORD]
 
-    def __init__(self, username:str, password:str):
-        super().__init__()
-        self.username = username
+    def __init__(self, user_id:int=None, user_val:str=None, password:str=None):
+        super().__init__(id=user_id, name=user_val)
+        self.user_id = user_id
+        self.user_val = user_val
         self.password = password

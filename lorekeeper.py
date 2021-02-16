@@ -1,20 +1,22 @@
 from abc import ABCMeta
 import click
-import json
 import os
 import sqlite3
 from flask import current_app, Flask, g
 from flask.cli import with_appcontext
+from werkzeug.security import generate_password_hash
 
 from .consts import *
 from .models import Row, Table
 
 class LoreKeeper(metaclass=ABCMeta):
     #? maybe a dict of databases?
-    def __init__(self, db_name:str='DATABASE'):
+    def __init__(self, db_name:str=None):
         self.db_name = db_name
         self._db = None
         self._table_map = {}
+
+    def __repr__(self): return self.__class__
 
     @property
     def tables(self) -> list:
@@ -28,9 +30,7 @@ class LoreKeeper(metaclass=ABCMeta):
 
         return tables
 
-        return
-
-    @property
+    @property  # TODO: does this need to be a property?
     def table_map(self) -> dict:
         return self._table_map
 
@@ -160,14 +160,14 @@ class LoreKeeper(metaclass=ABCMeta):
                 if key in conjunctions:
                     temp.append(cls._where(table, val, conjunction=key))
                 elif isinstance(key, tuple):
-                    temp.append(f"{key[0]} {val} {cls.coerce_type(key[1])}")
+                    temp.append(f"{key[0]} {val} {cls._coerce_type(key[1])}")
                 else:
-                    temp.append(f"{key} = {cls.coerce_type(val)}")
+                    temp.append(f"{key} = {cls._coerce_type(val)}")
 
             WHERE = f" {conjunction} ".join(temp)
 
-        elif cls.is_iter(conditions):
-            if any(cls.is_iter(condition) for condition in conditions):
+        elif cls._is_iter(conditions):
+            if any(cls._is_iter(condition) for condition in conditions):
                 temp = []
                 for condition in conditions:
                     temp.append(cls._where(table, condition))
@@ -176,9 +176,9 @@ class LoreKeeper(metaclass=ABCMeta):
                 if len(conditions) == 1:
                     WHERE = cls._where(table, conditions[0])
                 elif len(conditions) == 2:
-                    WHERE = f"{conditions[0]} = {coerce_type(conditions[1])}"
+                    WHERE = f"{conditions[0]} = {cls._coerce_type(conditions[1])}"
                 elif len(conditions) == 3:
-                    WHERE = f"{conditions[0]} {conditions[1]} {coerce_type(conditions[2])}"
+                    WHERE = f"{conditions[0]} {conditions[1]} {cls._coerce_type(conditions[2])}"
 
         return WHERE
 
@@ -216,17 +216,17 @@ class LoreKeeper(metaclass=ABCMeta):
             new_obj = datatype.from_dict(values)
             values = new_obj.to_dict()
 
-        cols = self._get_columns(table)[1:]
+        cols = self._get_columns(table)[1:]  # TODO: intersection of table columns and values keys
         INSERT = "INSERT INTO `{TABLE}` ({COLUMNS}) VALUES ({VALUES})".format(
             TABLE=table,
             COLUMNS=", ".join(cols),
             VALUES=", ".join("?" * len(cols))
         )
         
-        if not isinstance(values, dict):
-            values = dict(zip(cols, values))
+        if isinstance(values, dict):
+            values = list(map(values.get, cols))  # [f"{values.get(key)}" for key in cols]
 
-        self.db.execute(INSERT, [f"{values.get(key)}" for key in cols])
+        self.db.execute(INSERT, values)
         self.db.commit()
 
     def update(self, table:str, values:dict, where:dict) -> None:
@@ -272,9 +272,6 @@ class LoreKeeper(metaclass=ABCMeta):
 
         return table
 
-    @classmethod
-    def get_usernames(cls) -> list: return cls.select(USER, columns=[USER_VAL])
-
 # ==========================================================================================
         
     @classmethod
@@ -304,12 +301,14 @@ class LoreKeeper(metaclass=ABCMeta):
         return val
 
     @staticmethod
-    def is_iter(obj) -> bool:
+    def _is_iter(obj) -> bool:
         return hasattr(obj, '__iter__') and not isinstance(obj, str)
 
     @staticmethod
     def _contains(containing, contained) -> bool:
         return any(True for elem in contained if elem in containing)
+
+    def __repr__(self): return f"{self.__class__.__name__}: {self.db_name}"
 
 # ==========================================================================================
     # database initialization methods
@@ -322,6 +321,7 @@ class LoreKeeper(metaclass=ABCMeta):
     def _init_db(self) -> None:
         with current_app.open_resource('schema.sql') as f:
             self.db.executescript(f.read().decode('utf8'))
+        self.update(Tables.USER, {PASSWORD: generate_password_hash('admin')}, where=1)
 
     @staticmethod
     def _close_db(e=None) -> None:
@@ -330,15 +330,17 @@ class LoreKeeper(metaclass=ABCMeta):
         if db:
             db.close()
 
-    # @staticmethod
+    @staticmethod
     @click.command('init-db')
+    @click.argument('database')
     @with_appcontext
-    def _init_db_command() -> None:
+    def _init_db_command(database:str) -> None:
         """Clear the existing data and create new tables."""
 
-        LoreKeeper()._init_db()
+        LoreKeeper(database)._init_db()
         click.echo(f"Initialized the database.")
 
-    @click.command('backup-db')
-    def um() -> None:
-        pass
+    # TODO
+    # @click.command('backup-db')
+    # def backup_db() -> None:
+    #     pass

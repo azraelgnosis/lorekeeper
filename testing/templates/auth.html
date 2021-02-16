@@ -1,0 +1,10 @@
+{% extends 'layout.html' %}
+
+{% block content %}
+    {% if  menu == "register" %}
+        {% include '_register.html' %}    
+    {% endif %}
+    {% if menu == "login" %}
+        {% include '_login.html' %}
+    {% endif %}
+{% endblock content %}
