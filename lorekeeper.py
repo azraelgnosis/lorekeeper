@@ -6,17 +6,59 @@ from flask import current_app, Flask, g
 from flask.cli import with_appcontext
 from werkzeug.security import generate_password_hash
 
-from .consts import *
-from .models import Row, Table
+from consts import *
+from lorekeeper.models import Row, Table, User, Model
+
+
+class Join(object):
+    def __init__(self, select, *args, **kwargs):
+        if isinstance(select, dict):
+            self._init(**select)
+        else:
+            self._init(select, *args, **kwargs)
+    
+    def _init(self, select, col=None, alias=None, on_col=None, from_col=None):
+        self.select = select
+        self.alias = alias or select
+        self.on_col = on_col or col or f"{alias or select}_id"
+        self.from_col = from_col or col
+
+    def __iter__(self): return iter(self.to_dict().items())
+
+    def to_dict(self):
+        return {
+            "select": self.select,
+            "alias": self.alias,
+            "on_col": self.on_col,
+            "from_col": self.from_col,
+        }
+
 
 class LoreKeeper(metaclass=ABCMeta):
+    
     #? maybe a dict of databases?
     def __init__(self, db_name:str=None):
         self.db_name = db_name
         self._db = None
-        self._table_map = {}
+        self._table_map = {
+            Tables.USER: User
+        }
+        self._tables = None
+        self._paths = None
+        self._url_map = None
 
-    def __repr__(self): return self.__class__
+    def __repr__(self): return f"{self.__class__.__name__}: {self.db_name}"
+
+    @property
+    def paths(self):
+        return {
+            "templates": current_app.paths['templates'],
+            "layout": os.path.join(current_app.paths['templates'], "layout.html")
+        }
+
+    @property
+    @staticmethod
+    def app(): return current_app
 
     @property
     def tables(self) -> list:
@@ -78,23 +120,46 @@ class LoreKeeper(metaclass=ABCMeta):
 
     #TODO: somehow connect joining on the same table multiples times to the select columns
     @classmethod
-    def _join(cls, from_table:str, join:dict) -> str:
+    def _join(cls, from_table:str, joins:list=[]) -> str:
         """
-        Creates a left join clause for each table-column pair in `join`.
+        Creates a left join clause for each table-column pair in `joins`.
         """
 
+        # JOIN = ""
+        # result = []
+        # for idx, join in enumerate(joins):
+        #     if isinstance(join, str):
+        #         result.append(f"LEFT JOIN {join} AS {join}{idx} ON {join}{idx}.{join}_id = {from_table}.{join}_id")
+        #     elif isinstance(join, dict):
+        #         result.append(
+        #             f"LEFT JOIN {select} AS {alias} ON {alias}.{on_col} = {from_table}.{from_col}".format(**join))
+        # JOIN = "\t\n".join(result)
+
+        # return JOIN
+
+        ###
         JOIN = ""
-        if join:
-            joins = []
-            if isinstance(join, dict):
-                for idx, (table, on) in enumerate(join.items()):
-                    joins.append(f"LEFT JOIN {table} AS {table}{idx} ON {table}{idx}.{on} = {from_table}.{on}")
-            elif cls._is_iter(join):
-                for idx, table in enumerate(join):
-                    joins.append(f"LEFT JOIN {table} AS {table}{idx} ON {table}{idx}.{table}_id = {from_table}.{table}_id")
-                raise NotImplementedError("Table names are plural; default id columns are singular.") #TODO
+        if isinstance(joins, str):
+            JOIN = f"LEFT JOIN {joins} AS {joins} ON {joins}.{joins}_id = {from_table}.{joins}_id"
+        elif isinstance(joins, (dict, Join)):
+            JOIN = "LEFT JOIN ({select}) AS {alias} ON {alias}.{on_col} = {from_table}.{from_col}".format(**dict(joins), from_table=from_table)
+        elif cls._is_iter(joins):
+            JOIN = "\t\n".join([cls._join(from_table, joins) for join in joins])
 
-            JOIN = "\t\n".join(joins)
+        ####
+
+        # JOIN = ""
+        # if join:
+        #     joins = []
+        #     if isinstance(join, dict):
+        #         for idx, (table, on) in enumerate(join.items()):
+        #             joins.append(f"LEFT JOIN {table} AS {table}{idx} ON {table}{idx}.{on} = {from_table}.{on}")
+        #     elif cls._is_iter(join):
+        #         for idx, table in enumerate(join):
+        #             joins.append(f"LEFT JOIN {table} AS {table}{idx} ON {table}{idx}.{table}_id = {from_table}.{table}_id")
+        #         raise NotImplementedError("Table names are plural; default id columns are singular.") #TODO
+
+        #     JOIN = "\t\n".join(joins)
 
         return JOIN
 
@@ -124,7 +189,19 @@ class LoreKeeper(metaclass=ABCMeta):
         if isinstance(columns, str):
             COLUMNS += columns
         elif isinstance(columns, dict):
-            COLUMNS += ", ".join(f"`{table}`.{column}" for table, column in columns.items())
+            col_list = []
+            for table, cols in columns.items():
+                if cls._is_iter(cols):
+                    for col in cols:
+                        if isinstance(col, dict):
+                            key, val = col.copy().popitem()
+                            col_list.append(f"`{table}`.{key} AS {val}")
+                        else:
+                            col_list.append(f"`{table}`.{col}")
+                else:
+                    col_list.append(f"`{table}`.{cols}")
+            COLUMNS = ", ".join(col_list)
+            #COLUMNS += ", ".join(f"`{table}`.{column}" for table, column in columns.items())
         elif cls._is_iter(columns):
             COLUMNS += ", ".join(columns)
 
@@ -142,7 +219,7 @@ class LoreKeeper(metaclass=ABCMeta):
         WHERE = ""
         if isinstance(conditions, (int, str)):
             try:
-                # assumes `conditions` must be an id: "42" -> "table_id = 42"
+                # assumes `conditions` must be an id: "42" -> "`{table}`.{table}_id = 42"
                 WHERE = f"`{table}`.{table}_id = {int(conditions)}"  
             except ValueError:
                 if cls._contains(conditions, comparators):
@@ -166,32 +243,29 @@ class LoreKeeper(metaclass=ABCMeta):
 
             WHERE = f" {conjunction} ".join(temp)
 
+        elif isinstance(conditions, Model):
+            WHERE = cls._where(table=table, conditions=conditions.id or conditions.val)
+
         elif cls._is_iter(conditions):
-            if any(cls._is_iter(condition) for condition in conditions):
-                temp = []
-                for condition in conditions:
-                    temp.append(cls._where(table, condition))
-                WHERE = f" {conjunction} ".join(temp)
-            else:
-                if len(conditions) == 1:
-                    WHERE = cls._where(table, conditions[0])
-                elif len(conditions) == 2:
-                    WHERE = f"{conditions[0]} = {cls._coerce_type(conditions[1])}"
-                elif len(conditions) == 3:
-                    WHERE = f"{conditions[0]} {conditions[1]} {cls._coerce_type(conditions[2])}"
+            WHERE = f" {conjunction} ".join([cls._where(table, condition) for condition in conditions])
 
         return WHERE
 
-    def select(self, table:str, columns='*', join=None, where=None, datatype=None) -> list:
-        """SELECT `columns` FROM `table` [LEFT JOIN `join`] [WHERE `where`]"""
-
-        SELECT = "SELECT {COLUMNS} FROM {TABLE} {JOIN} {WHERE}" \
+    def _select(self, table:str, columns='*', join=None, where=None, datatype=None) ->list:
+        SELECT = "SELECT {COLUMNS} FROM `{TABLE}` {JOIN} {WHERE}" \
             .format(
                 COLUMNS=self._columns(columns),
                 TABLE=table,
                 JOIN=self._join(table, join),
                 WHERE=f"WHERE {self._where(table, where)}" if where else ""
             )
+
+        return SELECT.strip()
+
+    def select(self, table:str, columns='*', join=None, where=None, datatype=None) -> list:
+        """SELECT `columns` FROM `table` [LEFT JOIN `join`] [WHERE `where`]"""
+
+        SELECT = self._select(table, columns, join, where, datatype)
 
         results = self.db.execute(SELECT).fetchall()
         if datatype:
@@ -203,8 +277,17 @@ class LoreKeeper(metaclass=ABCMeta):
      #TODO: columns parameter 
     
     #? will probaly need to add validation
-    def select_one(self, table:str, where, columns:list='*', datatype=None):
-        return self.select(table, columns, where, datatype)[0]
+    def select_one(self, table:str, where, columns:list='*', join=None, datatype=None):
+        """SELECT `columns` from `table` [LEFT JOIN `join`, ...] [`WHERE `where`] LIMIT 1"""
+
+        SELECT = self._select(table, columns, join, where, datatype) + " LIMIT 1"
+
+        result = self.db.execute(SELECT).fetchone()
+        if datatype and result:
+            datatype = self.table_map.get(table, datatype)
+            result = datatype.from_row(result)
+        
+        return result
 
     #? and maybe intersection of table columns and values
     def insert(self, table:str, values:dict, datatype=None) -> None:
@@ -213,6 +296,7 @@ class LoreKeeper(metaclass=ABCMeta):
         """
         
         if datatype:
+            datatype = self.table_map.get(datatype, datatype)
             new_obj = datatype.from_dict(values)
             values = new_obj.to_dict()
 
@@ -249,14 +333,14 @@ class LoreKeeper(metaclass=ABCMeta):
         DELETE FROM `table` WHERE `where`;
         """
 
-        query = "DELETE FROM {TABLE} WHERE {WHERE};".format(
+        query = "DELETE FROM `{TABLE}` WHERE {WHERE};".format(
             TABLE=table,
-            WHERE=_where(where)
+            WHERE=self._where(table, where)
         )
         self.db.execute(query)
         self.db.commit()
 
-# ==========================================================================================
+    # ==========================================================================================
 
     #! check tables property above
     def get_table(table_name:str) -> Table: raise NotImplementedError
@@ -272,7 +356,7 @@ class LoreKeeper(metaclass=ABCMeta):
 
         return table
 
-# ==========================================================================================
+    # ==========================================================================================
         
     @classmethod
     def _coerce_type(cls, val, separator=",", none=None):
@@ -308,9 +392,7 @@ class LoreKeeper(metaclass=ABCMeta):
     def _contains(containing, contained) -> bool:
         return any(True for elem in contained if elem in containing)
 
-    def __repr__(self): return f"{self.__class__.__name__}: {self.db_name}"
-
-# ==========================================================================================
+    # ==========================================================================================
     # database initialization methods
 
     @classmethod
@@ -319,9 +401,12 @@ class LoreKeeper(metaclass=ABCMeta):
         app.cli.add_command(cls._init_db_command)
 
     def _init_db(self) -> None:
-        with current_app.open_resource('schema.sql') as f:
+        with current_app.open_resource(os.path.join(os.path.dirname(__file__), 'schema.sql')) as f:
             self.db.executescript(f.read().decode('utf8'))
-        self.update(Tables.USER, {PASSWORD: generate_password_hash('admin')}, where=1)
+        self.update(Tables.USER, {PASSWORD: generate_password_hash('admin')}, where=1)  # seems unsafe
+
+        with current_app.open_resource(os.path.join(current_app.paths['app'], 'schema.sql')) as f:
+            self.db.executescript(f.read().decode('utf8'))
 
     @staticmethod
     def _close_db(e=None) -> None:
@@ -344,3 +429,9 @@ class LoreKeeper(metaclass=ABCMeta):
     # @click.command('backup-db')
     # def backup_db() -> None:
     #     pass
+
+if __name__ == "__main__":
+    lk = LoreKeeper()
+    print(lk._join("language", Join(select=lk._select("user"), col="user_id", alias="ancestor")))
+
+    print("done")

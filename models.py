@@ -2,15 +2,15 @@ from abc import ABC
 import json
 import sqlite3
 
-from .consts import *
+from consts import *
 
 class Row(sqlite3.Row):
     def __init__(self, cursor, values):
         self.cursor = cursor
         self.values = values
         self.columns = [col[0] for col in cursor.description]
-        self.id = " ".join([str(val) for col, val in zip(self.columns, self.values) if 'id' in col]) # combines values with 'id' in column name.
-        self.val = " ".join([str(val) for col, val in zip(self.columns, self.values) if 'val' in col]) # combines values with 'val' in column name.
+        self.id = next(val for col, val in zip(self.columns, self.values) if 'id' in col)
+        self.val = next(val for col, val in zip(self.columns, self.values) if 'val' in col)
         
         for col, val in zip(self.columns, self.values):
             setattr(self, col, val)
@@ -64,36 +64,30 @@ class Row(sqlite3.Row):
 
 
 class Model(ABC, object):
-    __slots__ = [ID, NAME]
+    __slots__ = [ID, VAL]
     columns = []
-    rename = {}
+    aliases = {}
 
-    def __init__(self, pk=None, name=None, **kwargs) -> None:
+    def __init__(self, pk=None, val=None, **kwargs) -> None:
         self.id = pk
-        self.name = name  # TODO what's this for?
+        self.val = val
 
-        for key, val in kwargs.items():
-            setattr(self, key, val)
-        
-        self._init()
-    
-    def _init(self): ...
+        for slot in self.__slots__:
+            setattr(self, slot, kwargs.get(slot))
+
+        for alias, attr in self.aliases.items():
+            setattr(self, alias, self[attr])
 
     @classmethod
-    def from_row(cls, row:Row) -> 'Model':
-        if any(key in cls.rename.keys() for key in row.keys()):
-            new_obj = cls(**{cls.rename.get(key, key): val for key, val in row.items()})
-        else:
-            new_obj = cls(**row)
-
-        return new_obj
+    def from_row(cls, row:Row) -> 'Model': return cls(**row)
 
     def to_csv(self): return ",".join(getattr(self, slot) for slot in self.__slots__)
-    def to_dict(self): return dict(self)
-    def to_json(self): return json.dumps(dict(self)) # return str(dict(self)).replace("'", '"').replace("None", "null")
+    def to_dict(self): return {slot: getattr(self, slot) for slot in self.__slots__}
+    def to_json(self): return json.dumps(self.to_dict()) # return str(dict(self)).replace("'", '"').replace("None", "null")
 
-    def __iter__(self): return iter({slot: getattr(self, slot) for slot in self.__slots__}.items())
-    def __repr__(self): return f"{self.__class__.__name__}: {self.name}"
+    def __repr__(self): return f"{self.__class__.__name__}: {self.val}"
+
+    def __getitem__(self, attr:str): return getattr(self, attr)
 
 
 class Table(Model):
@@ -140,7 +134,7 @@ class User(Model):
     __slots__ = [USER_ID, USER_VAL, PASSWORD]
 
     def __init__(self, user_id:int=None, user_val:str=None, password:str=None):
-        super().__init__(id=user_id, name=user_val)
+        super().__init__(id=user_id, val=user_val)
         self.user_id = user_id
         self.user_val = user_val
         self.password = password

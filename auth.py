@@ -1,28 +1,40 @@
-from flask import Blueprint, flash, g, session, redirect, render_template, request, url_for
+import jinja2
+import os
+from flask import flash, g, session, redirect, render_template, request, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from .cyanotype import Cyanotype
 from .consts import *
 from .models import User
 
-class AuthPrint(Blueprint):
-    url_rules = []
 
-    def __init__(self, lorekeeper:'LoreKeeper', name:str='auth', import_name:str=__name__, url_prefix:str='/auth', **kwargs):
-        super().__init__(name=name, import_name=import_name, url_prefix=url_prefix, **kwargs)
-        self.lk = lorekeeper
+class AuthPrint(Cyanotype):
+    root_path = os.path.dirname(__file__)
+    template_path = os.path.join(root_path, "templates") # same as template_folder?
+    # auth_path = os.path.join(template_path, "auth")
 
-        for url_rule in self.url_rules:  # TODO
-            pass
-
-        # TODO
-        self.add_url_rule(rule='/register/', endpoint='register', view_func=self.signup, methods=(GET, POST))
-        self.add_url_rule(rule='/login/', endpoint='login', view_func=self.login, methods=(GET, POST))
-        self.add_url_rule(rule='/logout/', endpoint='logout', view_func=self.logout, methods=(GET, POST))
+    def __init__(self, lorekeeper:'LoreKeeper', template_folder:str, name:str='auth', import_name:str=__name__, url_prefix:str='/auth', **kwargs):
+        self.url_rules = [
+            {RULE:'/register/', ENDPOINT:'register', VIEW_FUNC:self.signup},
+            {RULE:'/login/', ENDPOINT:'login', VIEW_FUNC:self.login},
+            {RULE:'/logout/', ENDPOINT:'logout', VIEW_FUNC:self.logout},
+        ]
+        super().__init__(lorekeeper=lorekeeper, template_folder=self.template_path, name=name, import_name=import_name, url_prefix=url_prefix, **kwargs)
+        self.jinja_loader = jinja2.FileSystemLoader([self.template_folder, template_folder])
         self.before_app_request(self.load_logged_in_user)
 
-# ====================================================================================================
-# views
-# ====================================================================================================
+    def get_index(self):
+        endpoint = ""
+        for rule in self.lk.url_map.iter_rules():
+            if "index" in rule.endpoint:
+                endpoint = rule.endpoint
+                break
+        return endpoint
+
+    # ====================================================================================================
+    # views
+    # ====================================================================================================
+
     def signup(self):
         if request.method == "POST":
             username = request.form['username'].strip().lower()
@@ -42,7 +54,7 @@ class AuthPrint(Blueprint):
 
             flash(errors)
 
-        return render_template('auth.html', menu="register")
+        return render_template('auth/auth.html', menu="register", layout=self.lk.paths['layout'])
 
     def login(self):
         if request.method == "POST":
@@ -51,7 +63,7 @@ class AuthPrint(Blueprint):
 
             return self._login(username, password)            
 
-        return render_template('auth.html', menu="login")
+        return render_template('auth/auth.html', menu="login", layout=self.lk.paths['layout'])
 
     def _login(self, username, password):
         errors = []
@@ -65,16 +77,17 @@ class AuthPrint(Blueprint):
             session.clear()
             session[USER_ID] = user.id
 
-            return redirect(url_for('index'))
+            index = self.get_index()
+            return redirect(url_for(index))
 
         flash(errors)
 
-    @staticmethod
-    def logout():
+    def logout(self):
         session.clear()
-        return redirect(url_for('index'))  #! may need to be a variable
+        index = self.get_index()
+        return redirect(url_for(index))
 
-# ====================================================================================================
+    # ====================================================================================================
 
     def _get_user_by_id(self, user_id:int) -> User:
         return self.lk.select(Tables.USER, where={USER_ID: user_id}, datatype=User)[0]
@@ -99,7 +112,12 @@ class AuthPrint(Blueprint):
         if not user_id:
             g.user = None
         else:
-            g.user = self._get_user_by_id(user_id)
+            try:
+                g.user = self._get_user_by_id(user_id)
+            except IndexError:
+                g.user = None
+                session.clear()
+                redirect(url_for('auth.login'))
 
 
 # ===========================

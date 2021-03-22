@@ -1,0 +1,14 @@
+<nav class="navbar navbar-expand-lg navbar-light">
+    <a class="navbar-brand" href="{{ url_for('index') }}">Home</a>
+    <div class="container-fluid">
+        <ul class="navbar-nav">
+            {% if g.user %}
+                <li class="nav-item"><span>{{ g.user['user_val'] }}</span></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('auth.logout') }}">Logout</a></li>
+            {% else %}
+                <li class="nav-item"><a class='nav-link' href="{{ url_for('auth.register') }}">Register</a></li>
+                <li class="nav-item"><a class='nav-link' href="{{ url_for('auth.login') }}">Login</a></li>
+            {% endif %}
+        </ul>
+    </div>
+</nav>
