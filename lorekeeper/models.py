@@ -2,18 +2,31 @@ from abc import ABC
 import json
 import sqlite3
 
-from consts import *
+from lorekeeper.lorekeeper.consts import *
 
 class Row(sqlite3.Row):
     def __init__(self, cursor, values):
         self.cursor = cursor
         self.values = values
-        self.columns = [col[0] for col in cursor.description]
-        self.id = next(val for col, val in zip(self.columns, self.values) if 'id' in col)
-        self.val = next(val for col, val in zip(self.columns, self.values) if 'val' in col)
+        self.columns = (col[0] for col in cursor.description)
+        
+        self._id = None
+        self._val = None
         
         for col, val in zip(self.columns, self.values):
             setattr(self, col, val)
+
+    @property
+    def id(self): 
+        if not self._id:
+            self._id = next(val for col, val in zip(self.columns, self.values) if 'id' in col)
+        return self._id
+
+    @property
+    def val(self):
+        if not self._val:
+            self._val = next(val for col, val in zip(self.columns, self.values) if 'val' in col)
+        return self._val
 
     def get(self, attr:str):
         """
@@ -134,7 +147,7 @@ class User(Model):
     __slots__ = [USER_ID, USER_VAL, PASSWORD]
 
     def __init__(self, user_id:int=None, user_val:str=None, password:str=None):
-        super().__init__(id=user_id, val=user_val)
+        super().__init__(pk=user_id, val=user_val)
         self.user_id = user_id
         self.user_val = user_val
         self.password = password

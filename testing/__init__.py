@@ -1,7 +1,7 @@
 from flask import Flask, render_template
 import os
 
-from ..flasket import Flasket
+from lorekeeper.lorekeeper.flasket import Flasket
 
 PATH = os.path.dirname(__file__)
 

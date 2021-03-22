@@ -6,8 +6,8 @@ from flask import current_app, Flask, g
 from flask.cli import with_appcontext
 from werkzeug.security import generate_password_hash
 
-from consts import *
-from lorekeeper.models import Row, Table, User, Model
+from lorekeeper.lorekeeper.consts import *
+from lorekeeper.lorekeeper.models import Row, Table, User, Model
 
 
 class Join(object):
@@ -57,8 +57,10 @@ class LoreKeeper(metaclass=ABCMeta):
         }
 
     @property
-    @staticmethod
-    def app(): return current_app
+    def app(self): return current_app
+
+    @property
+    def url_map(self): return self.app.url_map
 
     @property
     def tables(self) -> list:

@@ -1,9 +1,9 @@
 from flask import Flask
 import os
 
-from .auth import AuthPrint
-from .lorekeeper import LoreKeeper
-from .cyanotype import Rule
+from lorekeeper.lorekeeper.auth import AuthPrint
+from lorekeeper.lorekeeper.lorekeeper import LoreKeeper
+from lorekeeper.lorekeeper.cyanotype import Rule
 
 class Flasket(Flask):
     def __init__(self, import_name, lorekeeper=None, db_name=None, **kwargs):

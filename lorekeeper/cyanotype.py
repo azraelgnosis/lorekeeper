@@ -1,6 +1,6 @@
 from flask import Blueprint, current_app
 
-from consts import *
+from lorekeeper.lorekeeper.consts import *
 
 
 class Rule(object):

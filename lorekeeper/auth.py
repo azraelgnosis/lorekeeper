@@ -3,9 +3,9 @@ import os
 from flask import flash, g, session, redirect, render_template, request, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from .cyanotype import Cyanotype
-from .consts import *
-from .models import User
+from lorekeeper.lorekeeper.cyanotype import Cyanotype
+from lorekeeper.lorekeeper.consts import *
+from lorekeeper.lorekeeper.models import User
 
 
 class AuthPrint(Cyanotype):
